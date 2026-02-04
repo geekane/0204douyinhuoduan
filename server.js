@@ -5,7 +5,17 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors());
+// 配置CORS - 允许Chrome扩展访问
+app.use(cors({
+    origin: '*', // 允许所有来源（Chrome扩展需要）
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: false
+}));
+
+// 处理预检请求
+app.options('*', cors());
+
 app.use(express.json());
 
 // ============================================================================
