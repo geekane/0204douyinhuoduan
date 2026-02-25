@@ -90,7 +90,7 @@ function extractAudioFromAweme(aweme) {
 app.get('/api/extract', async (req, res) => {
     let url = req.query.url;
     const videoId = req.query.videoId; // 新增：可选的视频ID参数，用于过滤特定视频
-    
+
     if (!url) return res.status(400).json({ success: false, error: '缺少 url 参数' });
 
     console.log(`[Backend] Processing URL: ${url}`);
@@ -120,47 +120,78 @@ app.get('/api/extract', async (req, res) => {
 
             if (!secUid) throw new Error("Could not find secUid");
 
-            const count = req.query.count || 35; // 增加默认数量以提高找到目标视频的概率
-            const apiUrl = `https://www.douyin.com/aweme/v1/web/aweme/post/?device_platform=webapp&aid=6383&channel=channel_pc_web&pc_client_type=1&sec_user_id=${secUid}&max_cursor=0&count=${count}${CONFIG.commonParams}`;
+            const requestedCount = parseInt(req.query.count) || 35;
+            let allResults = [];
+            let maxCursor = 0;
+            let hasMore = true;
+            let page = 0;
+            let authorName = null;
 
-            console.log('[Backend] Fetching user videos...');
-            const response = await fetch(apiUrl, { headers: fetchHeaders });
-            const text = await response.text();
-            const data = JSON.parse(text);
-            const list = data.aweme_list || [];
+            console.log(`[Backend] Target count: ${requestedCount}, fetching for secUid: ${secUid}`);
 
-            if (list.length === 0) {
-                console.warn('[Backend] API returned empty list. Response:', text.substring(0, 500));
-                throw new Error("API returned unexpected empty list");
+            while (hasMore && allResults.length < requestedCount && page < 10) { // 最多爬取10页防止死循环
+                page++;
+                const countToFetch = Math.min(requestedCount - allResults.length, 35);
+                const apiUrl = `https://www.douyin.com/aweme/v1/web/aweme/post/?device_platform=webapp&aid=6383&channel=channel_pc_web&pc_client_type=1&sec_user_id=${secUid}&max_cursor=${maxCursor}&count=${countToFetch}${CONFIG.commonParams}`;
+
+                console.log(`[Backend] Fetching page ${page}, cursor: ${maxCursor}, count: ${countToFetch}`);
+
+                const response = await fetch(apiUrl, { headers: fetchHeaders });
+                const text = await response.text();
+                const data = JSON.parse(text);
+                const list = data.aweme_list || [];
+
+                if (list.length === 0) {
+                    console.log(`[Backend] Page ${page} returned empty list. Stopping.`);
+                    break;
+                }
+
+                if (!authorName && list[0]?.author?.nickname) {
+                    authorName = list[0]?.author?.nickname;
+                }
+
+                const pageResults = list.map(item => {
+                    const { audioUrl, title } = extractAudioFromAweme(item);
+                    return {
+                        awemeId: item.aweme_id,
+                        videoTitle: title,
+                        videoUrl: audioUrl,
+                        pageUrl: `https://www.douyin.com/video/${item.aweme_id}`
+                    };
+                });
+
+                allResults = allResults.concat(pageResults);
+                maxCursor = data.max_cursor || 0;
+                hasMore = data.has_more === true || data.has_more === 1;
+
+                console.log(`[Backend] Page ${page} finished. Total so far: ${allResults.length}, hasMore: ${hasMore}`);
+
+                if (hasMore && allResults.length < requestedCount) {
+                    // 稍微延迟一下，模拟人类行为
+                    await new Promise(resolve => setTimeout(resolve, 300));
+                }
             }
 
-            const results = list.map(item => {
-                const { audioUrl, title } = extractAudioFromAweme(item);
-                return {
-                    awemeId: item.aweme_id,
-                    videoTitle: title,
-                    videoUrl: audioUrl,
-                    pageUrl: `https://www.douyin.com/video/${item.aweme_id}`
-                };
-            });
+            // 截断多出的结果
+            const finalResults = allResults.slice(0, requestedCount);
 
             // 如果指定了videoId，只返回匹配的视频
             if (videoId) {
-                const targetVideo = results.find(v => v.awemeId === videoId);
+                const targetVideo = finalResults.find(v => v.awemeId === videoId);
                 if (targetVideo) {
                     console.log(`[Backend] Found target video: ${videoId}`);
                     res.json({
                         success: true,
                         type: 'single',
                         ...targetVideo,
-                        authorName: list[0]?.author?.nickname,
+                        authorName: authorName,
                         authorSecUid: secUid
                     });
                 } else {
-                    console.warn(`[Backend] Video ${videoId} not found in user's recent ${results.length} videos`);
+                    console.warn(`[Backend] Video ${videoId} not found in user's recent ${finalResults.length} videos`);
                     res.status(404).json({
                         success: false,
-                        error: `视频 ${videoId} 未在用户最近的 ${results.length} 个视频中找到，可能需要增加count参数`
+                        error: `视频 ${videoId} 未在用户最近的 ${finalResults.length} 个视频中找到，可能需要增加提取数量。`
                     });
                 }
             } else {
@@ -168,10 +199,10 @@ app.get('/api/extract', async (req, res) => {
                 res.json({
                     success: true,
                     type: 'user',
-                    authorName: list[0]?.author?.nickname,
+                    authorName: authorName,
                     secUid: secUid,
-                    count: results.length,
-                    videos: results
+                    count: finalResults.length,
+                    videos: finalResults
                 });
             }
 
