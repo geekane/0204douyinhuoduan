@@ -129,7 +129,7 @@ app.get('/api/extract', async (req, res) => {
 
             console.log(`[Backend] Target count: ${requestedCount}, fetching for secUid: ${secUid}`);
 
-            while (hasMore && allResults.length < requestedCount && page < 10) { // 最多爬取10页防止死循环
+            while (hasMore && allResults.length < requestedCount && page < 50) { // 提升至 50 页上限，解决博主视频超过 350 条时的提取问题
                 page++;
                 const countToFetch = Math.min(requestedCount - allResults.length, 35);
                 const apiUrl = `https://www.douyin.com/aweme/v1/web/aweme/post/?device_platform=webapp&aid=6383&channel=channel_pc_web&pc_client_type=1&sec_user_id=${secUid}&max_cursor=${maxCursor}&count=${countToFetch}${CONFIG.commonParams}`;
@@ -206,8 +206,39 @@ app.get('/api/extract', async (req, res) => {
                 });
             }
 
+        } else if (targetUrl.includes('/video/')) {
+            // === 单视频详情模式 (直接通过ID解析，绕过主页扫描限制) ===
+            const videoIdMatch = targetUrl.match(/\/video\/(\d+)/);
+            const id = videoIdMatch ? videoIdMatch[1] : videoId;
+
+            if (!id) throw new Error("Could not extract videoId from URL");
+
+            console.log(`[Backend] Fetching direct detail for videoId: ${id}`);
+            const detailApiUrl = `https://www.douyin.com/aweme/v1/web/aweme/detail/?device_platform=webapp&aid=6383&channel=channel_pc_web&pc_client_type=1&aweme_id=${id}${CONFIG.commonParams}`;
+
+            const response = await fetch(detailApiUrl, { headers: fetchHeaders });
+            const data = await response.json();
+            const aweme = data.aweme_detail;
+
+            if (!aweme) {
+                console.error(`[Backend] Video detail failed:`, data);
+                throw new Error(data.status_msg || "视频详情获取失败，可能视频已删除或私密");
+            }
+
+            const { audioUrl, title } = extractAudioFromAweme(aweme);
+            res.json({
+                success: true,
+                type: 'single',
+                awemeId: id,
+                videoTitle: title,
+                videoUrl: audioUrl,
+                pageUrl: targetUrl,
+                authorName: aweme.author?.nickname || '未知作者',
+                authorSecUid: aweme.author?.sec_uid || null
+            });
+
         } else {
-            throw new Error("Unsupported URL type. Please use user homepage URL.");
+            throw new Error("Unsupported URL type. Please use user homepage or video URL.");
         }
 
     } catch (e) {
