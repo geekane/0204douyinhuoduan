@@ -129,7 +129,35 @@ app.get('/api/extract', async (req, res) => {
 
             console.log(`[Backend] Target count: ${requestedCount}, fetching for secUid: ${secUid}`);
 
-            while (hasMore && allResults.length < requestedCount && page < 50) { // 提升至 50 页上限，解决博主视频超过 350 条时的提取问题
+            // === 性能优化：短路查找 (如果是单视频提取，先尝试直接解析详情，避开翻页循环) ===
+            if (videoId) {
+                try {
+                    console.log(`[Backend] [Fast Path] Attempting direct detail fetch for videoId: ${videoId}`);
+                    const detailApiUrl = `https://www.douyin.com/aweme/v1/web/aweme/detail/?device_platform=webapp&aid=6383&channel=channel_pc_web&pc_client_type=1&aweme_id=${videoId}${CONFIG.commonParams}`;
+                    const detailResponse = await fetch(detailApiUrl, { headers: fetchHeaders });
+                    const detailData = await detailResponse.json();
+                    
+                    if (detailData.aweme_detail) {
+                        console.log(`[Backend] [Fast Path] SUCCESS! Found video ${videoId} via direct API.`);
+                        const { audioUrl, title } = extractAudioFromAweme(detailData.aweme_detail);
+                        return res.json({
+                            success: true,
+                            type: 'single',
+                            awemeId: videoId,
+                            videoTitle: title,
+                            videoUrl: audioUrl,
+                            pageUrl: `https://www.douyin.com/video/${videoId}`,
+                            authorName: detailData.aweme_detail.author?.nickname || null,
+                            authorSecUid: secUid
+                        });
+                    }
+                    console.warn(`[Backend] [Fast Path] Direct API did not return aweme_detail. Falling back to scan.`);
+                } catch (fastErr) {
+                    console.error(`[Backend] [Fast Path] Direct API Error: ${fastErr.message}. Falling back to scan.`);
+                }
+            }
+
+            while (hasMore && allResults.length < requestedCount && page < 50) { 
                 page++;
                 const countToFetch = Math.min(requestedCount - allResults.length, 35);
                 const apiUrl = `https://www.douyin.com/aweme/v1/web/aweme/post/?device_platform=webapp&aid=6383&channel=channel_pc_web&pc_client_type=1&sec_user_id=${secUid}&max_cursor=${maxCursor}&count=${countToFetch}${CONFIG.commonParams}`;
@@ -137,8 +165,7 @@ app.get('/api/extract', async (req, res) => {
                 console.log(`[Backend] Fetching page ${page}, cursor: ${maxCursor}, count: ${countToFetch}`);
 
                 const response = await fetch(apiUrl, { headers: fetchHeaders });
-                const text = await response.text();
-                const data = JSON.parse(text);
+                const data = await response.json(); // 直接解析JSON，保持简洁
                 const list = data.aweme_list || [];
 
                 if (list.length === 0) {
@@ -160,14 +187,28 @@ app.get('/api/extract', async (req, res) => {
                     };
                 });
 
+                // === 性能优化：实时匹配 (一旦找到目标视频，立即中断并返回) ===
+                if (videoId) {
+                    const targetVideo = pageResults.find(v => v.awemeId === videoId);
+                    if (targetVideo) {
+                        console.log(`[Backend] [Scan Path] Success! Found target video ${videoId} on page ${page}. Returning immediately.`);
+                        return res.json({
+                            success: true,
+                            type: 'single',
+                            ...targetVideo,
+                            authorName: authorName,
+                            authorSecUid: secUid
+                        });
+                    }
+                }
+
                 allResults = allResults.concat(pageResults);
                 maxCursor = data.max_cursor || 0;
                 hasMore = data.has_more === true || data.has_more === 1;
 
                 console.log(`[Backend] Page ${page} finished. Total so far: ${allResults.length}, hasMore: ${hasMore}`);
 
-                if (hasMore && allResults.length < requestedCount) {
-                    // 稍微延迟一下，模拟人类行为
+                if (hasMore && (requestedCount === 0 || allResults.length < requestedCount)) {
                     await new Promise(resolve => setTimeout(resolve, 300));
                 }
             }
