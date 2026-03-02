@@ -217,7 +217,17 @@ app.get('/api/extract', async (req, res) => {
             const detailApiUrl = `https://www.douyin.com/aweme/v1/web/aweme/detail/?device_platform=webapp&aid=6383&channel=channel_pc_web&pc_client_type=1&aweme_id=${id}${CONFIG.commonParams}`;
 
             const response = await fetch(detailApiUrl, { headers: fetchHeaders });
-            const data = await response.json();
+            const responseText = await response.text();
+            console.log(`[Backend] Detail API Response (first 100): ${responseText.substring(0, 100)}`);
+            
+            let data;
+            try {
+                data = JSON.parse(responseText);
+            } catch (parseErr) {
+                console.error(`[Backend] JSON Parse Error. Raw response: ${responseText}`);
+                throw new Error("抖音接口返回数据格式异常，可能是 Cookie 已失效或由于由于被反爬。请检查后端 COOKIE 配置。");
+            }
+            
             const aweme = data.aweme_detail;
 
             if (!aweme) {
