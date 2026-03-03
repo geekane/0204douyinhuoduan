@@ -10,6 +10,7 @@ RUN npm install --production
 
 # 复制必要的源代码文件
 COPY server.js ./
+COPY llm_service.js ./
 
 # 创建.env文件的占位符（实际环境变量通过运行时注入）
 # 不要在镜像中包含真实的.env文件
