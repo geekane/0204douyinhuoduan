@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
+const { generateNewCopywriting, generateNewCopywritingStream } = require('./llm_service');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -298,8 +299,97 @@ app.get('/api/extract', async (req, res) => {
     }
 });
 
+// ============================================================================
+//   LLM 文案生成 API
+// ============================================================================
+
+/**
+ * POST /api/generate-copywriting
+ * 根据原始转写文案和用户产品信息生成新的营销文案
+ *
+ * Body:
+ * {
+ *   "originalTranscript": "原始视频转写文案",
+ *   "userProduct": "用户产品信息/卖点"
+ * }
+ */
+app.post('/api/generate-copywriting', async (req, res) => {
+    const { originalTranscript, userProduct } = req.body;
+
+    console.log('[API] 收到文案生成请求');
+    console.log('[API] 原始文案长度:', originalTranscript?.length || 0);
+    console.log('[API] 产品信息:', userProduct?.substring(0, 50) || '(未提供)');
+
+    if (!originalTranscript || !userProduct) {
+        return res.status(400).json({
+            success: false,
+            error: '缺少必要参数：originalTranscript 或 userProduct'
+        });
+    }
+
+    try {
+        const newCopywriting = await generateNewCopywriting(originalTranscript, userProduct);
+
+        res.json({
+            success: true,
+            originalTranscript: originalTranscript,
+            userProduct: userProduct,
+            generatedCopywriting: newCopywriting
+        });
+
+    } catch (error) {
+        console.error('[API] 文案生成失败:', error.message);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+/**
+ * POST /api/generate-copywriting-stream
+ * 流式生成文案（支持实时返回）
+ */
+app.post('/api/generate-copywriting-stream', async (req, res) => {
+    const { originalTranscript, userProduct } = req.body;
+
+    console.log('[API] 收到流式文案生成请求');
+
+    if (!originalTranscript || !userProduct) {
+        return res.status(400).json({
+            success: false,
+            error: '缺少必要参数：originalTranscript 或 userProduct'
+        });
+    }
+
+    try {
+        // 设置 SSE 响应头
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+
+        // 发送初始消息
+        res.write(`data: ${JSON.stringify({ type: 'start', message: '开始生成文案...' })}\n\n`);
+
+        // 流式生成
+        await generateNewCopywritingStream(originalTranscript, userProduct, (chunk) => {
+            res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk })}\n\n`);
+        });
+
+        // 发送完成消息
+        res.write(`data: ${JSON.stringify({ type: 'done', message: '生成完成' })}\n\n`);
+        res.end();
+
+    } catch (error) {
+        console.error('[API] 流式生成失败:', error.message);
+        res.write(`data: ${JSON.stringify({ type: 'error', error: error.message })}\n\n`);
+        res.end();
+    }
+});
+
 app.get('/health', (req, res) => res.send('OK'));
 
 app.listen(PORT, () => {
     console.log(`[Backend] Server strictly mirroring test_audio_api.js logic on port ${PORT}`);
+    console.log(`[Backend] LLM 文案生成服务已启用`);
 });
