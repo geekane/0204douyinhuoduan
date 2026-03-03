@@ -1,7 +1,7 @@
 // llm_service.js - LLM 文案生成服务
 // 使用豆包 API 根据原始转写文案和用户产品信息生成新的营销文案
 
-const fetch = require('node-fetch');
+// Node.js 18+ 内置了 fetch，无需引入 node-fetch
 
 // LLM 配置
 const LLM_CONFIG = {
